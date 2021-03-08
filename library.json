@@ -1,0 +1,20 @@
+{
+	"name": "ADE9000",
+	"version": "1.0.0",
+	"keywords": "Sensors",
+	"description": "Library to interface with the ADE9000 from Analog Devices.",
+	"authors":
+	[
+		{
+		"name": "Benjamin Voelker",
+		"email": "voelkerb@me.com",
+		"url": "http://github.com/voelkerb/ADE9000"
+		}
+	],
+	"repository":
+	{
+		"type": "git",
+		"url": "http://github.com/voelkerb/ADE9000"
+	},
+	"frameworks": "arduino"
+}
