@@ -95,6 +95,13 @@ typedef struct{
  };
 
 
+struct Energy {
+  double active; 
+  double fundamental;
+  double reactive; 
+  double apparent; 
+  uint32_t validMillis;  
+};
 
 /*------Structure definition for STATUS0 register ADE9000--------------*/
 /*  Row:     0                                                            */
@@ -139,7 +146,9 @@ typedef union {
 
 
 class ADE9000 {
-  
+  // Threshold for bit shift at SPI speed
+  #define SPI_THRES 15000000
+  #define SPI_SPEED 20000000
   /****************************************************************************************************************
    Definitions
   ****************************************************************************************************************/
@@ -165,9 +174,12 @@ class ADE9000 {
   #define ADE90xx_FDSP 8000   			/*ADE9000 FDSP: 8000sps, ADE9078 FDSP: 4000sps*/
   #define ADE9000_RUN_ON 0x0001			/*DSP ON*/
   /*Energy Accumulation Settings*/
-  #define ADE9000_EP_CFG 0x0011			/*Enable energy accumulation, accumulate samples at 8ksps*/
-                      /*latch energy accumulation after EGYRDY*/
-                      /*If accumulation is changed to half line cycle mode, change EGY_TIME*/
+  // #define ADE9000_EP_CFG 0x0011			/*Enable energy accumulation, accumulate samples at 8ksps*/
+  //                     /*latch energy accumulation after EGYRDY*/
+  //                     /*If accumulation is changed to half line cycle mode, change EGY_TIME*/
+  #define ADE9000_EP_CFG 0x0021			/*Enable energy accumulation, accumulate samples at 8ksps*/
+                      /*read with reset feature*/
+                      /*add to current energy*/
   #define ADE9000_EGY_TIME 0x1F3F 				/*Accumulate 8000 samples*/
 
   /*Waveform buffer Settings*/
@@ -221,6 +233,7 @@ class ADE9000 {
     void setCalibration(float *values);
     // Reset the ADE9000
     void reset(void);
+    void resetEnergy();
 
     // Start sampling the ADE9000
     void startSampling(int frequency);
@@ -282,16 +295,23 @@ class ADE9000 {
     void convertFundCurrentRMSRegs(FundCurrentRMSRegs *data, float *values);
     void readFundCurrentRMS(float *values);
 
+    void updateEnergy();
+    uint32_t readRegister(uint16_t addr, size_t size=32);
+    void writeRegister(uint16_t addr, uint32_t data, size_t size=32);
 
-    // _____________________________________________________________________________
-    void readActiveEnergy(float *values);
-    
+    void readActiveEnergy(double *values);
+    void readReactiveEnergy(double *values);
+    void readApparentEnergy(double *values);
+    void readFundActiveEnergy(double *values);
+    void readFundReactiveEnergy(double *values);
+    void readFundApparentEnergy(double *values);
+
     uint8_t gainI; // Current gain of all Channel A B C
     uint8_t gainV;
 
+    void (*_logFunc)(const char * msg, ...);
 
   private:
-
     float _calibration[6];
     float _adcToI_L1, _adcToI_L2, _adcToI_L3;
     float _adcToV_L1, _adcToV_L2, _adcToV_L3;
@@ -299,20 +319,21 @@ class ADE9000 {
     float _adcToVRMS_L1,_adcToVRMS_L2,_adcToVRMS_L3;
     float _adcToPower_L1,_adcToPower_L2,_adcToPower_L3;
 
+    // If spi speed exceeds limit, the data is shifted by one bit (slower)
     void _dataBitShift(uint8_t *data, uint16_t size);
 
     uint16_t _read_16(uint16_t addr);
-
     uint32_t _read_32(uint16_t addr);
-
-    uint32_t SPI_Read_32(uint16_t Address);
+    uint16_t _read_16_CRC(uint16_t addr);
+    uint32_t _read_32_CRC(uint16_t addr);
 
     void _write_16(uint16_t addr, uint16_t data);
-
     void _write_32(uint16_t addr, uint32_t data);
+    void _write_16_Check(uint16_t addr, uint16_t data);
+    void _write_32_Check(uint16_t addr, uint32_t data);
+    
 
     void _burst_read_en(bool enable);
-
     void _burst_read(uint16_t addr, uint32_t *data, uint16_t size);
 
     // Unfortunately the "RX-Buffer-Full-interrupt" of the ESP-SPI does not work
@@ -322,13 +343,6 @@ class ADE9000 {
 
     // read RX Buffer. Returns "False" if the SPI is still busy.
     void _burst_read_SPI_Buffer(uint8_t *rx_data, uint8_t bytes);
-
-
-  char * registerToStr(uint32_t reg);
-
-    // For debugging print hexadecimal
-    char _hex(uint8_t i);
-    void _print_hex(uint32_t data);
 
     // Class members
     SPIClass *_spi;
@@ -345,6 +359,8 @@ class ADE9000 {
     bool _burst_en;
 
 
+    uint32_t _spi_speed;
+    uint8_t _rx_array[9];
     uint8_t _burst_read_tx_array [31];
     uint8_t _burst_read_rx_array [31];
 
