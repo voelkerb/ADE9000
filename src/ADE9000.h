@@ -160,6 +160,8 @@ class ADE9000 {
   #define ADE9000_CONFIG3	0x0000			/*Peak and overcurrent detection disabled*/
   #define ADE9000_ACCMODE 0x0000			/*60Hz operation, 3P4W Wye configuration, signed accumulation*/
                       /*Clear bit 8 i.e. ACCMODE=0x00xx for 50Hz operation*/
+  #define ADE9000_ACCMODE_60 0x0100			/*60Hz operation, 3P4W Wye configuration, signed accumulation*/
+                      /*Clear bit 8 i.e. ACCMODE=0x00xx for 50Hz operation*/
                       /*ACCMODE=0x0x9x for 3Wire delta when phase B is used as reference*/	
   #define ADE9000_TEMP_CFG 0x000C			/*Temperature sensor enabled*/
   #define ADE9000_ZX_LP_SEL 0x001E		/*Line period and zero crossing obtained from combined signals VA,VB and VC*/	
@@ -188,7 +190,7 @@ class ADE9000 {
   /*Full scale Codes referred from Datasheet.Respective digital codes are produced when ADC inputs are at full scale. Donot Change. */
   #define ADE9000_RMS_FULL_SCALE_CODES  52702092
   #define ADE9000_WATT_FULL_SCALE_CODES 20694066
-  #define ADE9000_RESAMPLED_FULL_SCALE_CODES  18196
+  #define ADE9000_RESAMPLED_FULL_SCALE_CODES 18196
   #define ADE9000_8K_FULL_SCALE_CODES  74532013
   #define ADE9000_32K_FULL_SCALE_CODES  67107786
   
@@ -209,7 +211,7 @@ class ADE9000 {
 
   public:
     // Constructor with reset dready or cf4 pin and spi bus (VSPI or HSPI)
-    ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t spi_bus = VSPI);  
+    ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t spi_bus = VSPI, int fNet=50);  
 
     // Destructor
     ~ADE9000(void);
@@ -306,8 +308,12 @@ class ADE9000 {
     void readFundReactiveEnergy(double *values);
     void readFundApparentEnergy(double *values);
 
+    void readLinePeriod(float *values);
+    void readPhaseAngle(float *values);
+
     uint8_t gainI; // Current gain of all Channel A B C
     uint8_t gainV;
+    int netfreq;
 
     void (*_logFunc)(const char * msg, ...);
 

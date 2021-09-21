@@ -34,7 +34,7 @@ struct spi_struct_t {
 
 
 // _____________________________________________________________________________
-ADE9000::ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t spi_bus): 
+ADE9000::ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t spi_bus, int fNet): 
       _PM1_PIN(pm1_pin), _DREADY_PIN(dready_pin), _RESET_PIN(reset_pin) {
   _spi = new SPIClass(spi_bus);
   _burst_en = false;
@@ -42,6 +42,8 @@ ADE9000::ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t
   _interruptHandler2= NULL;
   _samplingrate = -1;
   _spi_inited = false;
+
+  netfreq = fNet;
 
   // Init arrays with zeros
   for (uint8_t i = 0; i < 31; i++) {
@@ -59,7 +61,6 @@ ADE9000::ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t
 
   _logFunc = NULL;
 }
-
 // _____________________________________________________________________________
 ADE9000::~ADE9000() {
   delete _spi;
@@ -152,7 +153,11 @@ bool ADE9000::init() {
   _write_16(ADDR_CONFIG1,ADE9000_CONFIG1); 
   _write_16(ADDR_CONFIG2,ADE9000_CONFIG2); 
   _write_16(ADDR_CONFIG3,ADE9000_CONFIG3); 
-  _write_16(ADDR_ACCMODE,ADE9000_ACCMODE); 
+  if (netfreq == 60) {
+    _write_16(ADDR_ACCMODE,ADE9000_ACCMODE_60);
+  } else {
+    _write_16(ADDR_ACCMODE,ADE9000_ACCMODE);
+  }
   _write_16(ADDR_TEMP_CFG,ADE9000_TEMP_CFG); 
   _write_16(ADDR_ZX_LP_SEL,ADE9000_ZX_LP_SEL); 
   _write_32(ADDR_MASK0,ADE9000_MASK0); 
@@ -868,4 +873,27 @@ void ADE9000::readFundApparentEnergy(double *values) {
   values[1] = (double)high*_adcToPower_L2/3600.0;
   high = uint32_t (_read_32(ADDR_CFVAHR_HI));
   values[2] = (double)high*_adcToPower_L3/3600.0;
+}
+
+// _____________________________________________________________________________
+void ADE9000::readLinePeriod(float *values) {
+  uint32_t high = uint32_t (_read_32(ADDR_APERIOD));
+  values[0] = 1.0/((high+1)/(8000.0*65536.0));
+  high = uint32_t (_read_32(ADDR_BPERIOD));
+  values[1] = 1.0/((high+1)/(8000.0*65536.0));
+  high = uint32_t (_read_32(ADDR_CPERIOD));
+  values[2] = 1.0/((high+1)/(8000.0*65536.0));
+}
+
+// _____________________________________________________________________________
+void ADE9000::readPhaseAngle(float *values) {
+  uint16_t high = uint16_t (_read_16(ADDR_ANGL_VA_IA));
+  float consta = 0.017578125;
+  if (netfreq == 60) consta = 0.02109375;
+  values[0] = high*consta;
+  high = uint16_t (_read_16(ADDR_ANGL_VB_IB));
+  values[1] = high*consta;
+  high = uint16_t (_read_16(ADDR_ANGL_VC_IC));
+  values[2] = high*consta;
+  
 }
