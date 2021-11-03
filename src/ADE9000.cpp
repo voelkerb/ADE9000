@@ -135,7 +135,6 @@ bool ADE9000::init() {
   // Power Mode
   pinMode(_RESET_PIN, OUTPUT);
   pinMode(_PM1_PIN, OUTPUT);
-  digitalWrite(_PM1_PIN, LOW);
 
   // Reset the ADE9000
   reset();
@@ -196,7 +195,7 @@ void ADE9000::resetEnergy() {
 void ADE9000::initSPI(int8_t sck, int8_t miso, int8_t mosi, int8_t cs) {
   _spi_inited = true;
   _spi->setDataMode(SPI_MODE0);
-  _spi->setFrequency(24000000); // TODO: can we get faster?
+  _spi->setFrequency(SPI_SPEED); // TODO: can we get faster?
   // _spi->setFrequency(20000000); // TODO: can we get faster?
 
   _CS = cs;
