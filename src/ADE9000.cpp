@@ -168,7 +168,7 @@ bool ADE9000::init() {
   _write_32(ADDR_VLEVEL,ADE9000_VLEVEL); 
   _write_16(ADDR_EGY_TIME,ADE9000_EGY_TIME); 
   _write_16(ADDR_EP_CFG,ADE9000_EP_CFG);		//Energy accumulation ON 
-  if (_logFunc) _logFunc("Set Run On");
+  // if (_logFunc) _logFunc("Set Run On");
   _write_16(ADDR_RUN,ADE9000_RUN_ON);		//DSP ON
 
   return true;
@@ -212,12 +212,14 @@ void ADE9000::startSampling(int samplingrate) {
   uint16_t addr = addr32k;
   if (samplingrate <= 8000) {
     addr = addr8k;
-  } else {
     // DREADY = Sinc4 + IIR LPF output at 8 kSPS.
+    _write_16(ADDR_WFB_CFG, 0x0200);
+  } else {
+    // DREADY = Sinc4 + IIR LPF output at 32 kSPS.
     _write_16(ADDR_WFB_CFG, 0x0000);
   }
-  _burst_read_tx_array[0] = addr8k >> 8;    // addr [15 - 8]
-  _burst_read_tx_array[1] = addr8k | 0x8;   // addr [7 - 4], read-bit[3]
+  _burst_read_tx_array[0] = addr >> 8;    // addr [15 - 8]
+  _burst_read_tx_array[1] = addr | 0x8;   // addr [7 - 4], read-bit[3]
 
   // select which function to output on:Here DREADY
   _write_16(ADDR_CONFIG1, 0x000C);
