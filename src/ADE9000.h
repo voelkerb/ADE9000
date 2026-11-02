@@ -13,6 +13,14 @@
 
 #include <SPI.h>
 
+#if defined(CONFIG_IDF_TARGET_ESP32)
+#define ADE9000_DEFAULT_SPI_BUS VSPI
+#else
+#define ADE9000_DEFAULT_SPI_BUS FSPI
+#endif
+
+#define ADE9000_NO_PIN 0xFF
+
 // Struct of an ADC reading
 typedef struct{
   int32_t adc[7] = { 0 };
@@ -148,7 +156,7 @@ typedef union {
 class ADE9000 {
   // Threshold for bit shift at SPI speed
   #define SPI_THRES 15000000
-  #define SPI_SPEED 24000000
+  #define SPI_SPEED 10000000
   /****************************************************************************************************************
    Definitions
   ****************************************************************************************************************/
@@ -210,8 +218,9 @@ class ADE9000 {
   */
 
   public:
-    // Constructor with reset dready or cf4 pin and spi bus (VSPI or HSPI)
-    ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t spi_bus = VSPI, int fNet=50);  
+    // PM1 can be ADE9000_NO_PIN when the power mode is selected by board jumpers.
+    ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin,
+            uint8_t spi_bus = ADE9000_DEFAULT_SPI_BUS, int fNet=50);
 
     // Destructor
     ~ADE9000(void);
@@ -342,12 +351,10 @@ class ADE9000 {
     void _burst_read_en(bool enable);
     void _burst_read(uint16_t addr, uint32_t *data, uint16_t size);
 
-    // Unfortunately the "RX-Buffer-Full-interrupt" of the ESP-SPI does not work
-    // as expected, therefore the SPI bus must be accessed close to the hardware:
-    // write Data on SPI out
+    // Start a portable synchronous burst transfer.
     void _burst_write_SPI(uint8_t *tx_data, uint8_t bytes);
 
-    // read RX Buffer. Returns "False" if the SPI is still busy.
+    // Copy the result of the latest burst transfer.
     void _burst_read_SPI_Buffer(uint8_t *rx_data, uint8_t bytes);
 
     // Class members
