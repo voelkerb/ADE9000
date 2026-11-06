@@ -119,6 +119,10 @@ bool ADE9000::init() {
   calcConstants();
   // Power Mode
   pinMode(_RESET_PIN, OUTPUT);
+  if (_PM1_PIN != ADE9000_NO_PIN) {
+    pinMode(_PM1_PIN, OUTPUT);
+    digitalWrite(_PM1_PIN, LOW);
+  }
 
   // Reset the ADE9000
   reset();
