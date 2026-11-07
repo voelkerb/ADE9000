@@ -18,9 +18,30 @@
 
 #include "RTOS-ESP32-helper.h"
 
+// Optional asynchronous burst transfers through the private SPI registers.
+// Opt in with -DADE9000_USE_DIRECT_SPI_REGS. Only valid for the classic ESP32
+// with Arduino-ESP32 2.x, which exposes the SPI HAL internals.
+#if defined(ADE9000_USE_DIRECT_SPI_REGS)
+#if !defined(CONFIG_IDF_TARGET_ESP32) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
+#error "ADE9000_USE_DIRECT_SPI_REGS requires the classic ESP32 with Arduino-ESP32 2.x"
+#endif
+#include <driver/spi_common.h>
+#include <soc/spi_struct.h>
+#include "esp32-hal-spi.h"
+
+struct spi_struct_t {
+    spi_dev_t * dev;
+#if !CONFIG_DISABLE_HAL_LOCKS
+    xSemaphoreHandle lock;
+#endif
+    uint8_t num;
+};
+#endif
+
 // _____________________________________________________________________________
 ADE9000::ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t spi_bus, int fNet): 
-      _PM1_PIN(pm1_pin), _DREADY_PIN(dready_pin), _RESET_PIN(reset_pin) {
+      _PM0_PIN(ADE9000_NO_PIN), _PM1_PIN(pm1_pin), _powerMode(ADE9000_PSM0_NORMAL),
+      _DREADY_PIN(dready_pin), _RESET_PIN(reset_pin) {
   _spi = new SPIClass(spi_bus);
   _burst_en = false;
   _interruptHandler = NULL;
@@ -119,10 +140,8 @@ bool ADE9000::init() {
   calcConstants();
   // Power Mode
   pinMode(_RESET_PIN, OUTPUT);
-  if (_PM1_PIN != ADE9000_NO_PIN) {
-    pinMode(_PM1_PIN, OUTPUT);
-    digitalWrite(_PM1_PIN, LOW);
-  }
+  // The mode pins are sampled on reset: start in normal mode (PSM0)
+  setPowerMode(ADE9000_PSM0_NORMAL);
 
   // Reset the ADE9000
   reset();
@@ -167,6 +186,38 @@ bool ADE9000::init() {
 }
 
 // _____________________________________________________________________________
+void ADE9000::setPowerModePins(uint8_t pm0_pin, uint8_t pm1_pin) {
+  _PM0_PIN = pm0_pin;
+  _PM1_PIN = pm1_pin;
+}
+
+// _____________________________________________________________________________
+bool ADE9000::setPowerMode(ade9000_power_mode_t mode) {
+  const bool pm0 = (mode & 0x01) != 0;
+  const bool pm1 = (mode & 0x02) != 0;
+  // A pin left to the jumpers can only be satisfied if the mode needs it low
+  if ((_PM0_PIN == ADE9000_NO_PIN && pm0) || (_PM1_PIN == ADE9000_NO_PIN && pm1)) {
+    return false;
+  }
+  if (_PM0_PIN != ADE9000_NO_PIN) {
+    pinMode(_PM0_PIN, OUTPUT);
+    digitalWrite(_PM0_PIN, pm0 ? HIGH : LOW);
+  }
+  if (_PM1_PIN != ADE9000_NO_PIN) {
+    pinMode(_PM1_PIN, OUTPUT);
+    digitalWrite(_PM1_PIN, pm1 ? HIGH : LOW);
+  }
+  _powerMode = mode;
+  return true;
+}
+
+// _____________________________________________________________________________
+void ADE9000::setSPIFrequency(uint32_t hz) {
+  _spi_speed = hz;
+  if (_spi_inited) _spi->setFrequency(_spi_speed);
+}
+
+// _____________________________________________________________________________
 void ADE9000::reset(void){
   // Remove interrupt
   detachInterrupt(digitalPinToInterrupt(_DREADY_PIN));
@@ -188,7 +239,7 @@ void ADE9000::resetEnergy() {
 void ADE9000::initSPI(int8_t sck, int8_t miso, int8_t mosi, int8_t cs) {
   _spi_inited = true;
   _spi->setDataMode(SPI_MODE0);
-  _spi->setFrequency(SPI_SPEED);
+  _spi->setFrequency(_spi_speed);
 
   _CS = cs;
   _spi->begin(sck, miso, mosi, _CS);
@@ -538,6 +589,52 @@ void ADE9000::_burst_read(uint16_t addr, uint32_t *data, uint16_t size){
 
 
 // _____________________________________________________________________________
+#if defined(ADE9000_USE_DIRECT_SPI_REGS)
+void ADE9000::_burst_write_SPI(uint8_t *tx_data, uint8_t bytes) {
+  if(!_spi->bus()) {
+    return;
+  }
+
+  if(bytes > 64) bytes = 64;
+
+  uint32_t words = (bytes + 3) / 4;//16 max
+
+  uint32_t wordsBuf[16] = {0,};
+  uint8_t * bytesBuf = (uint8_t *) wordsBuf;
+
+  memcpy(bytesBuf, tx_data, bytes);//copy data to buffer
+
+  _spi->bus()->dev->mosi_dlen.usr_mosi_dbitlen = ((bytes * 8) - 1);
+  _spi->bus()->dev->miso_dlen.usr_miso_dbitlen = ((bytes * 8) - 1);
+
+  for(int i =0; i<words; i++) {
+    _spi->bus()->dev->data_buf[i] = wordsBuf[i];    //copy buffer to spi fifo
+  }
+
+  _spi->bus()->dev->cmd.usr = 1;
+}
+
+// _____________________________________________________________________________
+void ADE9000::_burst_read_SPI_Buffer(uint8_t *rx_data, uint8_t bytes) {
+  if(!_spi->bus()) {
+    return;
+  }
+
+  if(bytes > 64) bytes = 64;
+
+  uint32_t words = (bytes + 3) / 4;//16 max
+
+  uint32_t wordsBuf[16] = {0,};
+  uint8_t * bytesBuf = (uint8_t *) wordsBuf;
+
+  while(_spi->bus()->dev->cmd.usr);
+
+  for(int i=0; i<words; i++) {
+      wordsBuf[i] = _spi->bus()->dev->data_buf[i];//copy spi fifo to buffer
+  }
+  memcpy(rx_data, bytesBuf, bytes);//copy buffer to output
+}
+#else
 void ADE9000::_burst_write_SPI(uint8_t *tx_data, uint8_t bytes) {
   if (bytes > sizeof(_burst_read_rx_array)) {
     bytes = sizeof(_burst_read_rx_array);
@@ -552,6 +649,7 @@ void ADE9000::_burst_read_SPI_Buffer(uint8_t *rx_data, uint8_t bytes) {
   }
   memcpy(rx_data, _burst_read_rx_array, bytes);
 }
+#endif
 
 
 

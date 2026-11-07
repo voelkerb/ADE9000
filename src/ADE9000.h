@@ -21,6 +21,16 @@
 
 #define ADE9000_NO_PIN 0xFF
 
+// Power modes selected through the PM0/PM1 pins (ADE9000 datasheet).
+// PM1:PM0 = 00 PSM0 (normal), 01 PSM1 (reduced power), 10 PSM2 (low power),
+// 11 PSM3 (sleep). The DSP and waveform streaming require PSM0.
+typedef enum {
+  ADE9000_PSM0_NORMAL = 0,
+  ADE9000_PSM1_REDUCED = 1,
+  ADE9000_PSM2_LOW_POWER = 2,
+  ADE9000_PSM3_SLEEP = 3
+} ade9000_power_mode_t;
+
 // Struct of an ADC reading
 typedef struct{
   int32_t adc[7] = { 0 };
@@ -156,7 +166,12 @@ typedef union {
 class ADE9000 {
   // Threshold for bit shift at SPI speed
   #define SPI_THRES 15000000
-  #define SPI_SPEED 10000000
+  // Conservative default SPI clock. Override at compile time with
+  // -DADE9000_SPI_DEFAULT_HZ=... or at runtime with setSPIFrequency().
+  #ifndef ADE9000_SPI_DEFAULT_HZ
+  #define ADE9000_SPI_DEFAULT_HZ 10000000
+  #endif
+  #define SPI_SPEED ADE9000_SPI_DEFAULT_HZ
   /****************************************************************************************************************
    Definitions
   ****************************************************************************************************************/
@@ -219,8 +234,24 @@ class ADE9000 {
 
   public:
     // PM1 can be ADE9000_NO_PIN when the power mode is selected by board jumpers.
+    // Use setPowerModePins() to also drive PM0 from the MCU.
     ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin,
             uint8_t spi_bus = ADE9000_DEFAULT_SPI_BUS, int fNet=50);
+
+    // Set the PM0/PM1 pins driven by the MCU (ADE9000_NO_PIN = board jumper).
+    // Call before init().
+    void setPowerModePins(uint8_t pm0_pin, uint8_t pm1_pin);
+
+    // Drive PM0/PM1 for the requested mode. Returns false if a pin needed to
+    // select the mode is not configured. init() selects PSM0 before the reset;
+    // the mode pins are sampled on reset, so call reset() or init() after
+    // returning to PSM0 from another mode.
+    bool setPowerMode(ade9000_power_mode_t mode);
+
+    // SPI clock in Hz (default ADE9000_SPI_DEFAULT_HZ). Applies immediately if
+    // the SPI was already initialised. Above SPI_THRES the MISO data is
+    // shifted by one bit; use short wires for fast clocks.
+    void setSPIFrequency(uint32_t hz);
 
     // Destructor
     ~ADE9000(void);
@@ -351,7 +382,9 @@ class ADE9000 {
     void _burst_read_en(bool enable);
     void _burst_read(uint16_t addr, uint32_t *data, uint16_t size);
 
-    // Start a portable synchronous burst transfer.
+    // Start a burst transfer. Portable synchronous transfer by default; with
+    // ADE9000_USE_DIRECT_SPI_REGS (ESP32, Arduino-ESP32 2.x) it is started
+    // asynchronously through the SPI registers for the highest throughput.
     void _burst_write_SPI(uint8_t *tx_data, uint8_t bytes);
 
     // Copy the result of the latest burst transfer.
@@ -361,7 +394,9 @@ class ADE9000 {
     SPIClass *_spi;
     bool _spi_inited;
     
-    const uint8_t _PM1_PIN;
+    uint8_t _PM0_PIN;
+    uint8_t _PM1_PIN;
+    ade9000_power_mode_t _powerMode;
     const uint8_t _DREADY_PIN;
     const uint8_t _RESET_PIN;
     int8_t _CS;

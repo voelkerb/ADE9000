@@ -21,6 +21,10 @@ void IRAM_ATTR isr_adc_ready();
 
 // Used SPI pins
 #define ADE_SCK 12
+// SPI clock: 10 MHz is the safe default. Faster clocks (up to ~20 MHz) need short
+// wires; on the classic ESP32 with Arduino-ESP32 2.x, build with
+// -DADE9000_USE_DIRECT_SPI_REGS for the register-level burst path.
+#define ADE_SPI_HZ 20000000
 #define ADE_MISO 13
 #define ADE_CS 14
 #define ADE_MOSI 15
@@ -41,6 +45,7 @@ ADE9000 ade9k(ADE_RESET_PIN, ADE_DREADY_PIN, ADE_PM1_PIN, ADE_SPI_BUS);
 void setup() {
   Serial.begin(115200);
 
+  ade9k.setSPIFrequency(ADE_SPI_HZ);
   ade9k.initSPI(ADE_SCK, ADE_MISO, ADE_MOSI, ADE_CS);
   bool success = ade9k.init(&isr_adc_ready);
   if (!success) Serial.println("ADE9k Init Failed");

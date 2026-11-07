@@ -15,12 +15,26 @@ example is configured for the whatnick ADE9000 breakout:
 | MISO | 42 |
 | RESET | 4 |
 | CF4_DREADY | 5 |
+| PM0 | 6 |
+| PM1 | 7 |
 | GND | GND |
 
-Bridge both PM0 and PM1 to `0` on the breakout. The mode pins are then selected
-by the board jumpers, so pass `ADE9000_NO_PIN` as the legacy PM1 constructor
-argument. GPIO4 and GPIO5 are ordinary GPIOs on ESP32-S3 and avoid the USB
-pins, strapping pins, and flash/PSRAM pins.
+The MCU drives PM0 and PM1 (set the mode with `setPowerMode()`; `init()` selects
+normal mode PSM0 before reset), so leave the board's PM0/PM1 jumpers open and
+wire the pads to GPIO6/GPIO7. Alternatively, bridge both to `0` on the breakout
+and skip `setPowerModePins()`. GPIO4-7 are ordinary GPIOs on ESP32-S3 and avoid
+the USB pins, strapping pins, and flash/PSRAM pins.
+
+## SPI speed
+
+The default SPI clock is a conservative 10 MHz. Change it with
+`ade9k.setSPIFrequency(hz)` (before or after `initSPI()`) or compile with
+`-DADE9000_SPI_DEFAULT_HZ=...`. Above 15 MHz the library compensates the
+one-bit MISO shift, but wiring must be short. The portable path uses only the
+public Arduino `SPIClass` API (ESP32, ESP32-S3, Arduino-ESP32 2.x and 3.x). On the
+classic ESP32 with Arduino-ESP32 2.x, `-DADE9000_USE_DIRECT_SPI_REGS` enables the
+original register-level asynchronous burst transfer for the highest throughput;
+it is not available on the S3 or Arduino-ESP32 3.x.
 
 ```C++
 #include "ADE9000.h"
