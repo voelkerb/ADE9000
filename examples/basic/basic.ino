@@ -10,7 +10,7 @@
 #include "ADE9000.h"
 
 // Pins for ADE9000 SPI Connection
-#define ADE_SPI_BUS VSPI
+#define ADE_SPI_BUS ADE9000_DEFAULT_SPI_BUS
 #define ADE_RESET_PIN   2
 // NOTE: Sharing the same pin as ERROR LED; Obacht  
 #define ADE_PM1_PIN   4

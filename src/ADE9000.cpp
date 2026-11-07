@@ -9,20 +9,25 @@
  ****************************************************/
 
 #include <SPI.h>
-#include <driver/spi_common.h>
-#include <soc/spi_struct.h>
 
 // #include <esp32/rom/crc.h> // crc.h des ESP32 liefter falsche Ergebnisse
 #include "CRC-16-CCITT.h"  
 
-#include "esp32-hal-spi.h"
-
 #include "ADE9000.h"
 #include "ADE9000_REGISTER.h"
 
-#include "esp32-hal-spi.h"
-
 #include "RTOS-ESP32-helper.h"
+
+// Optional asynchronous burst transfers through the private SPI registers.
+// Opt in with -DADE9000_USE_DIRECT_SPI_REGS. Only valid for the classic ESP32
+// with Arduino-ESP32 2.x, which exposes the SPI HAL internals.
+#if defined(ADE9000_USE_DIRECT_SPI_REGS)
+#if !defined(CONFIG_IDF_TARGET_ESP32) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
+#error "ADE9000_USE_DIRECT_SPI_REGS requires the classic ESP32 with Arduino-ESP32 2.x"
+#endif
+#include <driver/spi_common.h>
+#include <soc/spi_struct.h>
+#include "esp32-hal-spi.h"
 
 struct spi_struct_t {
     spi_dev_t * dev;
@@ -31,11 +36,12 @@ struct spi_struct_t {
 #endif
     uint8_t num;
 };
-
+#endif
 
 // _____________________________________________________________________________
 ADE9000::ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t spi_bus, int fNet): 
-      _PM1_PIN(pm1_pin), _DREADY_PIN(dready_pin), _RESET_PIN(reset_pin) {
+      _PM0_PIN(ADE9000_NO_PIN), _PM1_PIN(pm1_pin), _powerMode(ADE9000_PSM0_NORMAL),
+      _DREADY_PIN(dready_pin), _RESET_PIN(reset_pin) {
   _spi = new SPIClass(spi_bus);
   _burst_en = false;
   _interruptHandler = NULL;
@@ -134,7 +140,8 @@ bool ADE9000::init() {
   calcConstants();
   // Power Mode
   pinMode(_RESET_PIN, OUTPUT);
-  pinMode(_PM1_PIN, OUTPUT);
+  // The mode pins are sampled on reset: start in normal mode (PSM0)
+  setPowerMode(ADE9000_PSM0_NORMAL);
 
   // Reset the ADE9000
   reset();
@@ -146,6 +153,11 @@ bool ADE9000::init() {
   pinMode(_DREADY_PIN, INPUT_PULLUP);
 
   delay(10);
+
+  const uint16_t version = _read_16(ADDR_VERSION);
+  if (version == 0x0000 || version == 0xFFFF) {
+    return false;
+  }
 
   _write_16(ADDR_PGA_GAIN,ADE9000_PGA_GAIN);
   _write_32(ADDR_CONFIG0,ADE9000_CONFIG0); 
@@ -174,6 +186,38 @@ bool ADE9000::init() {
 }
 
 // _____________________________________________________________________________
+void ADE9000::setPowerModePins(uint8_t pm0_pin, uint8_t pm1_pin) {
+  _PM0_PIN = pm0_pin;
+  _PM1_PIN = pm1_pin;
+}
+
+// _____________________________________________________________________________
+bool ADE9000::setPowerMode(ade9000_power_mode_t mode) {
+  const bool pm0 = (mode & 0x01) != 0;
+  const bool pm1 = (mode & 0x02) != 0;
+  // A pin left to the jumpers can only be satisfied if the mode needs it low
+  if ((_PM0_PIN == ADE9000_NO_PIN && pm0) || (_PM1_PIN == ADE9000_NO_PIN && pm1)) {
+    return false;
+  }
+  if (_PM0_PIN != ADE9000_NO_PIN) {
+    pinMode(_PM0_PIN, OUTPUT);
+    digitalWrite(_PM0_PIN, pm0 ? HIGH : LOW);
+  }
+  if (_PM1_PIN != ADE9000_NO_PIN) {
+    pinMode(_PM1_PIN, OUTPUT);
+    digitalWrite(_PM1_PIN, pm1 ? HIGH : LOW);
+  }
+  _powerMode = mode;
+  return true;
+}
+
+// _____________________________________________________________________________
+void ADE9000::setSPIFrequency(uint32_t hz) {
+  _spi_speed = hz;
+  if (_spi_inited) _spi->setFrequency(_spi_speed);
+}
+
+// _____________________________________________________________________________
 void ADE9000::reset(void){
   // Remove interrupt
   detachInterrupt(digitalPinToInterrupt(_DREADY_PIN));
@@ -195,8 +239,7 @@ void ADE9000::resetEnergy() {
 void ADE9000::initSPI(int8_t sck, int8_t miso, int8_t mosi, int8_t cs) {
   _spi_inited = true;
   _spi->setDataMode(SPI_MODE0);
-  _spi->setFrequency(SPI_SPEED); // TODO: can we get faster?
-  // _spi->setFrequency(20000000); // TODO: can we get faster?
+  _spi->setFrequency(_spi_speed);
 
   _CS = cs;
   _spi->begin(sck, miso, mosi, _CS);
@@ -231,7 +274,7 @@ void ADE9000::startSampling(int samplingrate) {
     attachInterrupt(digitalPinToInterrupt(_DREADY_PIN), _interruptHandler, RISING);
   } else if (_interruptHandler2 != nullptr) {
     Serial.printf("Init pin interrupt ESP Style\n");
-    const gpio_num_t int_pin = GPIO_NUM_34;
+    const gpio_num_t int_pin = static_cast<gpio_num_t>(_DREADY_PIN);
     // Configure interrupt for low level
     gpio_config_t config = {
       .pin_bit_mask = 1ull << int_pin,
@@ -262,7 +305,7 @@ void ADE9000::stopSampling() {
   if (_interruptHandler != nullptr) {
     detachInterrupt(_DREADY_PIN);
   } else if (_interruptHandler2 != nullptr) {
-    const gpio_num_t int_pin = GPIO_NUM_34;
+    const gpio_num_t int_pin = static_cast<gpio_num_t>(_DREADY_PIN);
     gpio_isr_handler_remove(int_pin);
   }
   _burst_read_en(false);
@@ -279,7 +322,7 @@ void IRAM_ATTR ADE9000::readRawMeasurement(CurrentADC *adc) {
   // where to read from
   _burst_write_SPI(_burst_read_tx_array, 31);  // is this correct here?
   _burst_read_SPI_Buffer(_burst_read_rx_array, 31);
-  _dataBitShift(_burst_read_rx_array, 31);
+  if (_needsDataBitShift()) _dataBitShift(_burst_read_rx_array, 31);
   // _burst_write_SPI(_burst_read_tx_array, 31);  // is this correct here?
   for (uint8_t i = 0; i < 7; i++) {
     adc->adc[i]  = _burst_read_rx_array[ 2+i*4 ] << 24;
@@ -308,7 +351,7 @@ void IRAM_ATTR ADE9000::readMeasurement(float *values) {
   // where to read from
   // _burst_write_SPI(_burst_read_tx_array, 31);  // is this correct here?
   _burst_read_SPI_Buffer(_burst_read_rx_array, 31);
-  _dataBitShift(_burst_read_rx_array, 31);
+  if (_needsDataBitShift()) _dataBitShift(_burst_read_rx_array, 31);
   _burst_write_SPI(_burst_read_tx_array, 31);  // is this correct here?
   CurrentADC adc;
   for (uint8_t i = 0; i < 7; i++) {
@@ -331,7 +374,7 @@ void ADE9000::_write_16(uint16_t addr , uint16_t data ) {
   tx_array[1] = addr;
   tx_array[2] = data >> 8;
   tx_array[3] = data;
-  _spi->transferBytes( tx_array, _rx_array, 6);
+  _spi->transferBytes(tx_array, _rx_array, sizeof(tx_array));
 }
 
 // _____________________________________________________________________________
@@ -355,7 +398,7 @@ uint16_t ADE9000::_read_16(uint16_t addr) {
   tx_array[0] = addr >> 8;
   tx_array[1] = addr | 0x8;
 
-  if (_spi_speed > SPI_THRES) {
+  if (_needsDataBitShift()) {
     _spi->transferBytes(tx_array, _rx_array, 5);
     _dataBitShift(_rx_array, 5);
   } else {
@@ -374,7 +417,7 @@ uint32_t ADE9000::_read_32(uint16_t addr) {
   tx_array[0] = addr >> 8;
   tx_array[1] = addr | 0x8;
 
-  if (_spi_speed > SPI_THRES) {
+  if (_needsDataBitShift()) {
     _spi->transferBytes(tx_array, _rx_array, 7);
     _dataBitShift(_rx_array, 7);
   } else {
@@ -409,6 +452,15 @@ void ADE9000::writeRegister(uint16_t addr, uint32_t data, size_t size) {
 }
 
 // _____________________________________________________________________________
+bool ADE9000::_needsDataBitShift() const {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+  return _spi_speed > SPI_THRES;
+#else
+  return false;
+#endif
+}
+
+// _____________________________________________________________________________
 void ADE9000::_dataBitShift(uint8_t *data, uint16_t size) {
   for (uint16_t i = 0; i < size - 1; i++){
     data[i] = data[i] << 1; // shift for one bit left
@@ -429,7 +481,7 @@ uint16_t ADE9000::_read_16_CRC(uint16_t addr) {
 
   _spi->transferBytes( tx_array, _rx_array, 7);
 
-  if (_spi_speed > SPI_THRES) _dataBitShift(_rx_array, 7);
+  if (_needsDataBitShift()) _dataBitShift(_rx_array, 7);
 
   uint8_t rx_data[2];
   rx_data[0] = _rx_array[2];
@@ -458,7 +510,7 @@ uint32_t ADE9000::_read_32_CRC(uint16_t addr) {
 
   _spi->transferBytes( tx_array, _rx_array, 9);
 
-  if (_spi_speed > SPI_THRES) _dataBitShift(_rx_array, 9);
+  if (_needsDataBitShift()) _dataBitShift(_rx_array, 9);
 
   uint8_t rx_data[4];
   rx_data[0] = _rx_array[2];
@@ -546,6 +598,7 @@ void ADE9000::_burst_read(uint16_t addr, uint32_t *data, uint16_t size){
 
 
 // _____________________________________________________________________________
+#if defined(ADE9000_USE_DIRECT_SPI_REGS)
 void ADE9000::_burst_write_SPI(uint8_t *tx_data, uint8_t bytes) {
   if(!_spi->bus()) {
     return;
@@ -583,8 +636,6 @@ void ADE9000::_burst_read_SPI_Buffer(uint8_t *rx_data, uint8_t bytes) {
   uint32_t wordsBuf[16] = {0,};
   uint8_t * bytesBuf = (uint8_t *) wordsBuf;
 
-  // FIXME dont use "bytes", use (spi->dev->miso_dlen.usr_miso_dbitlen+1) / 8
-
   while(_spi->bus()->dev->cmd.usr);
 
   for(int i=0; i<words; i++) {
@@ -592,6 +643,22 @@ void ADE9000::_burst_read_SPI_Buffer(uint8_t *rx_data, uint8_t bytes) {
   }
   memcpy(rx_data, bytesBuf, bytes);//copy buffer to output
 }
+#else
+void ADE9000::_burst_write_SPI(uint8_t *tx_data, uint8_t bytes) {
+  if (bytes > sizeof(_burst_read_rx_array)) {
+    bytes = sizeof(_burst_read_rx_array);
+  }
+  _spi->transferBytes(tx_data, _burst_read_rx_array, bytes);
+}
+
+// _____________________________________________________________________________
+void ADE9000::_burst_read_SPI_Buffer(uint8_t *rx_data, uint8_t bytes) {
+  if (bytes > sizeof(_burst_read_rx_array)) {
+    bytes = sizeof(_burst_read_rx_array);
+  }
+  memcpy(rx_data, _burst_read_rx_array, bytes);
+}
+#endif
 
 
 

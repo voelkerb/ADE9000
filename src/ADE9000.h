@@ -13,6 +13,24 @@
 
 #include <SPI.h>
 
+#if defined(CONFIG_IDF_TARGET_ESP32)
+#define ADE9000_DEFAULT_SPI_BUS VSPI
+#else
+#define ADE9000_DEFAULT_SPI_BUS FSPI
+#endif
+
+#define ADE9000_NO_PIN 0xFF
+
+// Power modes selected through the PM0/PM1 pins (ADE9000 datasheet).
+// PM1:PM0 = 00 PSM0 (normal), 01 PSM1 (reduced power), 10 PSM2 (low power),
+// 11 PSM3 (sleep). The DSP and waveform streaming require PSM0.
+typedef enum {
+  ADE9000_PSM0_NORMAL = 0,
+  ADE9000_PSM1_REDUCED = 1,
+  ADE9000_PSM2_LOW_POWER = 2,
+  ADE9000_PSM3_SLEEP = 3
+} ade9000_power_mode_t;
+
 // Struct of an ADC reading
 typedef struct{
   int32_t adc[7] = { 0 };
@@ -148,7 +166,12 @@ typedef union {
 class ADE9000 {
   // Threshold for bit shift at SPI speed
   #define SPI_THRES 15000000
-  #define SPI_SPEED 24000000
+  // Conservative default SPI clock. Override at compile time with
+  // -DADE9000_SPI_DEFAULT_HZ=... or at runtime with setSPIFrequency().
+  #ifndef ADE9000_SPI_DEFAULT_HZ
+  #define ADE9000_SPI_DEFAULT_HZ 10000000
+  #endif
+  #define SPI_SPEED ADE9000_SPI_DEFAULT_HZ
   /****************************************************************************************************************
    Definitions
   ****************************************************************************************************************/
@@ -210,8 +233,24 @@ class ADE9000 {
   */
 
   public:
-    // Constructor with reset dready or cf4 pin and spi bus (VSPI or HSPI)
-    ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin, uint8_t spi_bus = VSPI, int fNet=50);  
+    // PM1 can be ADE9000_NO_PIN when the power mode is selected by board jumpers.
+    // Use setPowerModePins() to also drive PM0 from the MCU.
+    ADE9000(uint8_t reset_pin, uint8_t dready_pin, uint8_t pm1_pin,
+            uint8_t spi_bus = ADE9000_DEFAULT_SPI_BUS, int fNet=50);
+
+    // Set the PM0/PM1 pins driven by the MCU (ADE9000_NO_PIN = board jumper).
+    // Call before init().
+    void setPowerModePins(uint8_t pm0_pin, uint8_t pm1_pin);
+
+    // Drive PM0/PM1 for the requested mode. Returns false if a pin needed to
+    // select the mode is not configured. init() selects PSM0 before the reset;
+    // the mode pins are sampled on reset, so call reset() or init() after
+    // returning to PSM0 from another mode.
+    bool setPowerMode(ade9000_power_mode_t mode);
+
+    // SPI clock in Hz (default ADE9000_SPI_DEFAULT_HZ). Applies immediately if
+    // the SPI was already initialised. Use short wires for fast clocks.
+    void setSPIFrequency(uint32_t hz);
 
     // Destructor
     ~ADE9000(void);
@@ -325,7 +364,8 @@ class ADE9000 {
     float _adcToVRMS_L1,_adcToVRMS_L2,_adcToVRMS_L3;
     float _adcToPower_L1,_adcToPower_L2,_adcToPower_L3;
 
-    // If spi speed exceeds limit, the data is shifted by one bit (slower)
+    // The classic ESP32 needs one-bit compensation at high SPI clocks.
+    bool _needsDataBitShift() const;
     void _dataBitShift(uint8_t *data, uint16_t size);
 
     uint16_t _read_16(uint16_t addr);
@@ -342,19 +382,21 @@ class ADE9000 {
     void _burst_read_en(bool enable);
     void _burst_read(uint16_t addr, uint32_t *data, uint16_t size);
 
-    // Unfortunately the "RX-Buffer-Full-interrupt" of the ESP-SPI does not work
-    // as expected, therefore the SPI bus must be accessed close to the hardware:
-    // write Data on SPI out
+    // Start a burst transfer. Portable synchronous transfer by default; with
+    // ADE9000_USE_DIRECT_SPI_REGS (ESP32, Arduino-ESP32 2.x) it is started
+    // asynchronously through the SPI registers for the highest throughput.
     void _burst_write_SPI(uint8_t *tx_data, uint8_t bytes);
 
-    // read RX Buffer. Returns "False" if the SPI is still busy.
+    // Copy the result of the latest burst transfer.
     void _burst_read_SPI_Buffer(uint8_t *rx_data, uint8_t bytes);
 
     // Class members
     SPIClass *_spi;
     bool _spi_inited;
     
-    const uint8_t _PM1_PIN;
+    uint8_t _PM0_PIN;
+    uint8_t _PM1_PIN;
+    ade9000_power_mode_t _powerMode;
     const uint8_t _DREADY_PIN;
     const uint8_t _RESET_PIN;
     int8_t _CS;
