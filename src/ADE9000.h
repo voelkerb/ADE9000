@@ -249,8 +249,7 @@ class ADE9000 {
     bool setPowerMode(ade9000_power_mode_t mode);
 
     // SPI clock in Hz (default ADE9000_SPI_DEFAULT_HZ). Applies immediately if
-    // the SPI was already initialised. Above SPI_THRES the MISO data is
-    // shifted by one bit; use short wires for fast clocks.
+    // the SPI was already initialised. Use short wires for fast clocks.
     void setSPIFrequency(uint32_t hz);
 
     // Destructor
@@ -365,7 +364,8 @@ class ADE9000 {
     float _adcToVRMS_L1,_adcToVRMS_L2,_adcToVRMS_L3;
     float _adcToPower_L1,_adcToPower_L2,_adcToPower_L3;
 
-    // If spi speed exceeds limit, the data is shifted by one bit (slower)
+    // The classic ESP32 needs one-bit compensation at high SPI clocks.
+    bool _needsDataBitShift() const;
     void _dataBitShift(uint8_t *data, uint16_t size);
 
     uint16_t _read_16(uint16_t addr);

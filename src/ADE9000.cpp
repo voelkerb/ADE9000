@@ -322,7 +322,7 @@ void IRAM_ATTR ADE9000::readRawMeasurement(CurrentADC *adc) {
   // where to read from
   _burst_write_SPI(_burst_read_tx_array, 31);  // is this correct here?
   _burst_read_SPI_Buffer(_burst_read_rx_array, 31);
-  if (_spi_speed > SPI_THRES) _dataBitShift(_burst_read_rx_array, 31);
+  if (_needsDataBitShift()) _dataBitShift(_burst_read_rx_array, 31);
   // _burst_write_SPI(_burst_read_tx_array, 31);  // is this correct here?
   for (uint8_t i = 0; i < 7; i++) {
     adc->adc[i]  = _burst_read_rx_array[ 2+i*4 ] << 24;
@@ -351,7 +351,7 @@ void IRAM_ATTR ADE9000::readMeasurement(float *values) {
   // where to read from
   // _burst_write_SPI(_burst_read_tx_array, 31);  // is this correct here?
   _burst_read_SPI_Buffer(_burst_read_rx_array, 31);
-  if (_spi_speed > SPI_THRES) _dataBitShift(_burst_read_rx_array, 31);
+  if (_needsDataBitShift()) _dataBitShift(_burst_read_rx_array, 31);
   _burst_write_SPI(_burst_read_tx_array, 31);  // is this correct here?
   CurrentADC adc;
   for (uint8_t i = 0; i < 7; i++) {
@@ -398,7 +398,7 @@ uint16_t ADE9000::_read_16(uint16_t addr) {
   tx_array[0] = addr >> 8;
   tx_array[1] = addr | 0x8;
 
-  if (_spi_speed > SPI_THRES) {
+  if (_needsDataBitShift()) {
     _spi->transferBytes(tx_array, _rx_array, 5);
     _dataBitShift(_rx_array, 5);
   } else {
@@ -417,7 +417,7 @@ uint32_t ADE9000::_read_32(uint16_t addr) {
   tx_array[0] = addr >> 8;
   tx_array[1] = addr | 0x8;
 
-  if (_spi_speed > SPI_THRES) {
+  if (_needsDataBitShift()) {
     _spi->transferBytes(tx_array, _rx_array, 7);
     _dataBitShift(_rx_array, 7);
   } else {
@@ -452,6 +452,15 @@ void ADE9000::writeRegister(uint16_t addr, uint32_t data, size_t size) {
 }
 
 // _____________________________________________________________________________
+bool ADE9000::_needsDataBitShift() const {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+  return _spi_speed > SPI_THRES;
+#else
+  return false;
+#endif
+}
+
+// _____________________________________________________________________________
 void ADE9000::_dataBitShift(uint8_t *data, uint16_t size) {
   for (uint16_t i = 0; i < size - 1; i++){
     data[i] = data[i] << 1; // shift for one bit left
@@ -472,7 +481,7 @@ uint16_t ADE9000::_read_16_CRC(uint16_t addr) {
 
   _spi->transferBytes( tx_array, _rx_array, 7);
 
-  if (_spi_speed > SPI_THRES) _dataBitShift(_rx_array, 7);
+  if (_needsDataBitShift()) _dataBitShift(_rx_array, 7);
 
   uint8_t rx_data[2];
   rx_data[0] = _rx_array[2];
@@ -501,7 +510,7 @@ uint32_t ADE9000::_read_32_CRC(uint16_t addr) {
 
   _spi->transferBytes( tx_array, _rx_array, 9);
 
-  if (_spi_speed > SPI_THRES) _dataBitShift(_rx_array, 9);
+  if (_needsDataBitShift()) _dataBitShift(_rx_array, 9);
 
   uint8_t rx_data[4];
   rx_data[0] = _rx_array[2];
